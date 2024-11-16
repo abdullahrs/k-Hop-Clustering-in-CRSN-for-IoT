@@ -1,102 +1,132 @@
-from constants import NUM_PUS
-from utility_functions import MWCBG, discover_k_hop_neighbors, probabilistic_neighbor_discovery
+from copy import deepcopy
+from math import sqrt
+
+from utility_functions import MWCBG, get_k_hop_neighbors
 
 
-def k_SACB_EC(su_positions, su_channels, channel_qualities, transmission_range):
-    clusters = set()  # Final clusters in CRSN
-    node_states = {i: "initial" for i in su_positions.keys()}
-    available_channels = {i: su_channels[i] for i in su_positions.keys()}
-
-    while any(state not in {"clustered_CM", "clustered_CH"} for state in node_states.values()):
-        for node_i in su_positions.keys():
-            if node_states[node_i] in {"clustered_CM", "clustered_CH"}:
-                continue
-
-            # Step I: Initial clustering
-            participant_i = set()
-            intermediate_cluster_i = set()
-            w_i = 0
-            Channel_i = available_channels[node_i]
-
-            # Discover eligible participants
-            for neighbor in discover_neighbors(node_i, su_positions, su_channels, transmission_range):
-                if node_states[neighbor] not in {"clustered_CM", "clustered_CH"}:
-                    if available_channels[node_i].intersection(available_channels[neighbor]):
-                        participant_i.add(neighbor)
-
-            # Prepare neighbor channels dictionary for MWCBG
-            neighbor_channels = {
-                neighbor: available_channels[neighbor] for neighbor in participant_i}
-
-            # Calculate MWCBG and determine potential cluster members
-            cmn_i, PCM_i, w_i = MWCBG(
-                node_i, Channel_i, participant_i, su_positions, channel_qualities, neighbor_channels)
-            # print("cmn_i : ", cmn_i)
-            # print("PCM_i : ", PCM_i)
-            # print("w_i : ", w_i)
-            if (cmn_i >= 2) and (w_i > max((channel_qualities[j] for j in PCM_i if j in channel_qualities), default=0)):
-                if node_states[node_i] == "initial":
-                    node_states[node_i] = "intermediate_CH"
-                    CM_i = PCM_i  # Current intermediate cluster members
-
-                # Notify CMs and update states
-                for cm in CM_i:
-                    if node_states[cm] == "initial":
-                        intermediate_cluster_i.add(cm)
-                        node_states[cm] = "clustered_CM"
-
-            # Step II: Edge contraction
-            contracted_cluster = intermediate_cluster_i.union({node_i})
-            # Update G(V, E) based on edge contraction
-            update_graph(contracted_cluster)
-
-            # Step III: Finalize clusters
-            if cmn_i < 2:
-                clusters.add(frozenset(contracted_cluster))
-                node_states[node_i] = "clustered_CH"
-            else:
-                highest_weight_ch = select_highest_weight_ch(
-                    participant_i, {node_i: w_i})
-                node_states[node_i] = "clustered_CM" if highest_weight_ch else "clustered_CH"
-
-    return clusters
-
-
-# Call probabilistic_neighbor_discovery with the full su_positions dictionary
-def discover_neighbors(node_id, su_positions, su_channels, transmission_range):
+def k_SACB_EC(nodes, edges, channels, su_positions, channel_qualities, su_transmission_range, k=2):
     """
-    Discover 1-hop neighbors for a given node using probabilistic neighbor discovery.
+    k-SACB-EC algorithm for k-hop clustering with edge contraction in a cognitive radio sensor network.
 
     Parameters:
-    - node_id: ID of the node for which neighbors are being discovered.
-    - su_positions: Dictionary of all SU positions.
-    - su_channels: Dictionary of channels available for each SU.
-    - transmission_range: The transmission range within which nodes are considered neighbors.
+        nodes: List of nodes in the network.
+        edges: Dictionary representing edges between nodes with node IDs as keys and sets of neighboring node IDs as values.
+        channels: Dictionary representing available channels for each node.
+        k: Number of hops for the clustering algorithm.
 
     Returns:
-    - Set of neighbors for the specified node.
+        clusters: List of clusters with their members.
     """
-    # Get all neighbors and then filter for the specific node_id
-    all_neighbors = probabilistic_neighbor_discovery(
-        su_positions, su_channels, transmission_range)
-    result = all_neighbors.get(node_id, set())
-    # print("discover_neighbors result :", result)
-    return result
+    su_channels = deepcopy(channels)
+    # Initialize clusters and state for each node
+    clusters = []
+    # Initialize all nodes as 'initial'
+    node_states = {node: 'initial' for node in nodes}
 
+    while any(state == 'initial' for state in node_states.values()):
+        for node in nodes:
+            if node_states[node] in {'clustered_CM', 'clustered_CH'}:
+                continue
 
-def update_graph(contracted_cluster):
-    # In practice, this updates the cluster memberships and possibly recalculates available channels
-    # Select cluster head as node with smallest ID
-    cluster_head = min(contracted_cluster)
-    # Update each node’s state and cluster affiliation here, if necessary
-    return cluster_head
+            # Step 1: Initialize participants and intermediate cluster for node
+            participants_i = set()
+            intermediate_cluster_i = set()
+            w_i = 0  # Initial weight for node's cluster
+            # Get the position of the current node
+            node_position = su_positions[node]
 
+            # Step 2: Neighbor Selection - Finding participants within 1-hop range that share at least one channel
+            # Map neighbor data with weight and position
+            # Filter edges for the specific node
+            # Filter out any empty sets if they exist
+            # Filter edges for the specific node
+            # print(f"Node {node}, channels {channels[node]}")
+            k_hop_neighbors = get_k_hop_neighbors(node, edges, k)
+            # print(f"Node {node}, {k}-hop-neighbors : {k_hop_neighbors}")
+            node_edges = [(neighbor, common_channels) for node_i, neighbor,
+                          common_channels in edges if node_i == node and neighbor in k_hop_neighbors]
+            # for node_i, neighbor,common_channels in edges:
+            #     print(f"node_i: {node_i} node : {node} neighbor : {neighbor}, k_hop_neighbors {k_hop_neighbors}")
+            # print(f"Node {node}, node_edges : {node_edges}")
 
-def select_highest_weight_ch(participant_i, node_weights):
-    # Find the CH with the highest weight among neighbors in `participant_i`
-    highest_weight_ch = max(
-        (node for node in participant_i if node in node_weights),
-        key=lambda node: node_weights[node],
-        default=None
-    )
-    return highest_weight_ch
+            # Ensure edges are in the correct format and store neighbor data
+            neighbor_data = {
+                neighbor: {
+                    "position": su_positions[neighbor],
+                    "channels": neighbor_channels
+                }
+                for neighbor, neighbor_channels in node_edges
+            }
+            # print("neighbor_data :", neighbor_data)
+            # Neighbor selection step - adding neighbors to participants if they are in initial state and share channels
+            for neighbor, neighbor_channels in node_edges:
+                # Calculate Euclidean distance
+                dx = su_positions[neighbor][0] - node_position[0]
+                dy = su_positions[neighbor][1] - node_position[1]
+                distance = sqrt(dx**2 + dy**2)
+                # print("distance :", distance)
+                if (
+                    node_states[neighbor] not in {
+                        'clustered_CM', 'clustered_CH'}
+                    and neighbor_channels.intersection(channels[node])
+                    and distance <= su_transmission_range
+                ):
+                    participants_i.add(neighbor)
+
+            # Step 3: Bipartite Graph Construction and Maximum Weight Calculation using MWCBG
+            # print(f"Node {node}, participants_i :", participants_i)
+            cmn_i, PCM_i, w_i = MWCBG(
+                node, node_position, channels[node], participants_i, neighbor_data, channel_qualities)
+
+            # Step 4: Cluster Head Selection
+            # print(f"Step 4: Cluster Head Selection, before the condition ,cmn_i :{cmn_i}, PCM_i : {PCM_i}, w_i :{w_i}")
+            if len(cmn_i) >= 2 and PCM_i:
+                # Mark node as intermediate cluster head
+                # print("Step 4: Cluster Head Selection, in the condition node_states[node]:", node_states[node])
+                if node_states[node] == 'initial':
+                    node_states[node] = 'intermediate_CH'
+                    # Nodes in PCM_i become cluster members
+                    CM_i = {p[0] for p in PCM_i}
+
+                    # Send 'join' message to each member in CM_i
+                    for member in CM_i:
+                        # Adding to intermediate cluster and marking as clustered_CM if it receives join only from this node
+                        if node_states[member] == 'initial':
+                            node_states[member] = 'clustered_CM'
+                            intermediate_cluster_i.add(member)
+
+            # Step 5: Edge Contraction - Updating graph structure
+            contracted_node = node  # The node itself will act as the cluster representative
+            new_edges = []
+            for member in intermediate_cluster_i:
+                # Contract edges, excluding edges from `member` back to `node`
+                for edge in edges:
+                    if edge[0] == member and edge[1] != contracted_node:
+                        new_edges.append((contracted_node, edge[1], edge[2]))
+                    elif edge[1] == member and edge[0] != contracted_node:
+                        new_edges.append((edge[0], contracted_node, edge[2]))
+                # Remove old member edges
+                edges = [edge for edge in edges if edge[0]
+                         != member and edge[1] != member]
+            edges += new_edges
+
+            # Set common channels for the contracted node
+            channels[contracted_node] = cmn_i.copy()
+
+            # Step 6: Cluster Finalization
+            # print("Step 6: Cluster Finalization, before the if condition PCM_i value :", PCM_i)
+            if len(cmn_i) < 2 or not any(w_i > weight for _, _, weight in PCM_i):
+                # print("Step 6: Cluster Finalization, in the condition value of intermediate_cluster_i: ", intermediate_cluster_i)
+                node_states[node] = 'clustered_CH'
+                final_cluster = intermediate_cluster_i | {node}
+                clusters.append(final_cluster)
+    # Validation for clusters are they satisfies the paper requirements
+    for cluster in clusters:
+        if len(cluster) > 1:
+            common_channels = set.intersection(*(su_channels[node] for node in cluster))
+            assert len(common_channels) >= 2, "Cluster does not meet the common channels requirement"
+    for cluster in clusters:
+        for node in cluster:
+            k_hop_neighbors = get_k_hop_neighbors(node, edges, k=2)
+            assert all(neighbor in cluster for neighbor in k_hop_neighbors if neighbor in clusters), "k-hop constraint not satisfied"
+    return clusters
