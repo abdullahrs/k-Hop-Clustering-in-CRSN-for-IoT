@@ -1,24 +1,24 @@
 from comparison_algorithms import NSAC, CogLEACH
 from constants import *
-from k_SACB_EC import k_SACB_EC
-from k_SACB_WEC import k_SACB_WEC
+from k_SACB_EC import kSACBEC
+from k_SACB_WEC import kSACBWEC
+from simulation import Replication
 from utility_functions import calculate_channel_qualities, calculate_edges
-from visualization import visualize_data
+from visualization import plot_metrics, visualize_data
 
 
-print("channel_usage :", channel_usage)
-channel_qualities = calculate_channel_qualities(NUM_CHANNELS)
-# Calculate edges based on positions, channels, and range
-edges = calculate_edges(NODES, su_positions,
-                        su_channels, SU_TRANSMISSION_RANGE)
+# print("channel_usage :", channel_usage)
+# channel_qualities = calculate_channel_qualities(NUM_CHANNELS)
+# # Calculate edges based on positions, channels, and range
+# edges = calculate_edges(NODES, su_positions,
+#                         su_channels, SU_TRANSMISSION_RANGE)
 
 # k_SACB_EC PART
 
-# # Pass edges to k_SACB_EC
-# clusters = k_SACB_EC(NODES, edges, su_channels.copy(),
+# kSACBEC_algo = kSACBEC(NODES, edges, su_channels.copy(),
 #                      su_positions, channel_qualities,
-#                      SU_TRANSMISSION_RANGE, k=2)
-
+#                      SU_TRANSMISSION_RANGE, INITIAL_ENERGY, SENSING_ENERGY)
+# clusters = kSACBEC_algo.run()
 
 # print("su_positions :", su_positions)
 # print("su_channels :", su_channels)
@@ -28,10 +28,21 @@ edges = calculate_edges(NODES, su_positions,
 
 # k_SACB_WEC PART
 
-# wec_clusters, wec_cluster_heads = k_SACB_WEC(NUM_SUS, su_positions, su_channels, channel_qualities, edges)
+# kSACBWEC_algo = kSACBWEC(
+#     num_sus=len(NODES),
+#     su_positions=su_positions,
+#     su_channels=su_channels,
+#     channel_qualities=channel_usage,
+#     su_energies=su_energies,
+#     edges=edges,
+#     k_max=5,
+#     preference_factor=0.5
+# )
 
-# print("wec_clusters :",wec_clusters)
-# print("wec_cluster_heads :",wec_cluster_heads)
+# wec_clusters, wec_cluster_heads = kSACBWEC_algo.run()
+
+# print("wec_clusters :", wec_clusters)
+# print("wec_cluster_heads :", wec_cluster_heads)
 
 # visualize_data(su_channels=su_channels, data=su_positions, clusters=wec_clusters)
 
@@ -47,22 +58,39 @@ edges = calculate_edges(NODES, su_positions,
 #     edges=edges
 # )
 
-# # Form clusters using NSAC
+# # # Form clusters using NSAC
 # nsac_clusters, nsac_cluster_heads = nsac_algo.form_clusters()
 
-# # Output the results
-# print("NSAC Clusters:", clusters)
-# print("NSAC Cluster Heads:", cluster_heads)
+# # # Output the results
+# print("NSAC Clusters:", nsac_clusters)
+# print("NSAC Cluster Heads:", nsac_cluster_heads)
 
 
 # CogLEACH
 
-cog_leach_algo = CogLEACH(
-    NODES, NUM_SUS, su_positions, su_channels, channel_qualities, SU_TRANSMISSION_RANGE,
+# cog_leach_algo = CogLEACH(
+#     NODES, NUM_SUS, su_positions, su_channels, channel_qualities, SU_TRANSMISSION_RANGE,
+# )
+
+# cog_leach_clusters, cog_leach_cluster_heads = cog_leach_algo.execute()
+
+# # # Output the results
+# print("CogLEACH Clusters:", cog_leach_clusters)
+# print("CogLEACH Cluster Heads:", cog_leach_cluster_heads)
+
+alpha = 2
+beta = 2
+
+simulation = Replication(
+    simulation_area=SIMULATION_AREA,
+    num_sus=NUM_SUS,
+    num_channels=NUM_CHANNELS,
+    su_transmission_range=SU_TRANSMISSION_RANGE,
+    initial_energy=INITIAL_ENERGY,
+    sensing_energy=SENSING_ENERGY,
 )
 
-cog_leach_clusters, cog_leach_cluster_heads = cog_leach_algo.execute()
+metrics = simulation.run()
+print(metrics)
 
-# # Output the results
-print("CogLEACH Clusters:", cog_leach_clusters)
-print("CogLEACH Cluster Heads:", cog_leach_cluster_heads)
+plot_metrics(metrics, alpha, beta)

@@ -50,3 +50,56 @@ def visualize_data(data, su_channels, clusters = []):
     
     # Show the plot
     plt.show()
+
+
+def plot_metrics(metrics, alpha, beta):
+    # Extract the data from the defaultdict
+    rounds = range(len(metrics['k-SACB-EC_energy']))
+    
+    # Define color and marker styles for each algorithm
+    colors = {
+        'k-SACB-EC': 'red',
+        'k-SACB-WEC': 'navy',
+        'NSAC': 'green',
+        'CogLEACH': 'blue'
+    }
+    markers = {
+        'k-SACB-EC': 'o',
+        'k-SACB-WEC': 's',
+        'NSAC': '^',
+        'CogLEACH': 'x'
+    }
+    
+    # Plot Energy Consumption over Time
+    plt.figure(figsize=(12, 6))
+    plt.plot(rounds, metrics['k-SACB-EC_energy'], label='k-SACB-EC Energy', 
+             color=colors['k-SACB-EC'], linestyle='-', marker=markers['k-SACB-EC'], linewidth=0.5, markersize=2)
+    plt.plot(rounds, metrics['k-SACB-WEC_energy'], label='k-SACB-WEC Energy', 
+             color=colors['k-SACB-WEC'], linestyle='-', marker=markers['k-SACB-WEC'], linewidth=0.5, markersize=2)
+    plt.plot(rounds, metrics['NSAC_energy'], label='NSAC Energy', 
+             color=colors['NSAC'], linestyle='-', marker=markers['NSAC'], linewidth=0.5, markersize=2)
+    plt.plot(rounds, metrics['CogLEACH_energy'], label='CogLEACH Energy', 
+             color=colors['CogLEACH'], linestyle='-', marker=markers['CogLEACH'], linewidth=0.5, markersize=2)
+    plt.title(f'Energy Consumption Over Time α:{alpha}, β:{beta}')
+    plt.xlabel('Rounds')
+    plt.ylabel('Energy')
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+    # Plot Number of Alive Nodes over Time
+    plt.figure(figsize=(12, 6))
+    plt.plot(rounds, metrics['k-SACB-EC_alive'], label='k-SACB-EC Alive Nodes', 
+             color=colors['k-SACB-EC'], linestyle='-', marker=markers['k-SACB-EC'], linewidth=1, markersize=4)
+    plt.plot(rounds, metrics['k-SACB-WEC_alive'], label='k-SACB-WEC Alive Nodes', 
+             color=colors['k-SACB-WEC'], linestyle='-', marker=markers['k-SACB-WEC'], linewidth=1, markersize=4)
+    plt.plot(rounds, metrics['NSAC_alive'], label='NSAC Alive Nodes', 
+             color=colors['NSAC'], linestyle='-', marker=markers['NSAC'], linewidth=1, markersize=4)
+    plt.plot(rounds, metrics['CogLEACH_alive'], label='CogLEACH Alive Nodes', 
+             color=colors['CogLEACH'], linestyle='-', marker=markers['CogLEACH'], linewidth=1, markersize=4)
+    plt.title('Alive Nodes Over Time')
+    plt.xlabel('Rounds')
+    plt.ylabel('Number of Alive Nodes')
+    plt.legend()
+    plt.grid(True)
+    plt.show()

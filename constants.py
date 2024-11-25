@@ -11,7 +11,7 @@ np.random.seed(RANDOM_SEED)
 
 # Define constants as per the simulation parameters in the paper
 SIMULATION_AREA = (300, 300)  # 300x300 m^2
-NUM_SUS = 80  # Number of SUs (can be varied from 30-100)
+NUM_SUS = 100  # Number of SUs (can be varied from 30-100)
 NUM_CHANNELS = 10  # Number of PU channels
 NUM_PUS = 10  # Number of PUs
 PU_TRANSMISSION_RANGE = 60  # Transmission range of PUs in meters
