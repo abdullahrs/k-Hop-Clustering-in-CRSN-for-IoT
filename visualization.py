@@ -1,105 +1,119 @@
+# visualization.py
+
 import matplotlib.pyplot as plt
+import numpy as np
+from typing import List, Dict, Any
+import networkx as nx
 
-def visualize_data(data, su_channels, clusters = []):
+def plot_network_energy(results: Dict[str, List[float]], 
+                       alpha: float, 
+                       beta: float):
     """
-    Visualizes data from a dictionary of the form {int: (float, float)}
-    and labels the points that have an associated value in the su_channels dictionary.
-    Additionally, it highlights the points that belong to the same cluster.
-
-    Parameters:
-    data (dict): A dictionary where the keys are integers and the values are tuples of two floats.
-    su_channels (dict): A dictionary where the keys are integers and the values are sets of integers.
-    clusters (list): A list of sets, where each set represents a cluster of points.
+    Plot network remaining energy over rounds (Figures 7-10)
+    
+    Args:
+        results: Dictionary mapping algorithm names to lists of energy values
+        alpha: PU departure rate
+        beta: PU arrival rate
     """
-    # Extract the x and y values from the dictionary
-    x_values = [x for x, _ in data.values()]
-    y_values = [y for _, y in data.values()]
+    plt.figure(figsize=(10, 6))
     
-    # Create the figure and axis objects
-    _, ax = plt.subplots(figsize=(4, 4))
+    for algo_name, energy_values in results.items():
+        plt.plot(range(len(energy_values)), energy_values, 
+                label=algo_name, marker='o', markersize=2)
     
-    # Plot the scatter points
-    ax.scatter(x_values, y_values, s=50, c='#8884d8')
-
-    # Add labels for the points that have an associated value in su_channels
-    for i, (x, y) in enumerate(zip(x_values, y_values)):
-        if i in su_channels:
-            ax.text(x, y, "ACHs:"+str(su_channels[i]), fontsize=8, ha='center', va='bottom')
-    
-    if len(clusters) > 0:
-        # Highlight the points that belong to the same cluster
-        cluster_colors = ['#FF6B6B', '#FFA500', '#9B59B6', 
-                          '#1ABC9C', '#3498DB', '#E74C3C', 
-                          '#FFCC00FF', '#2980B9', '#7796AAFF', 
-                          '#1F0603FF', '#3D361CFF', '#9FC3DBFF',
-                          '#1C031FFF', '#D48750FF', '#7B7BFF9A',
-                          '#7E687FFF', '#002842FF', '#00D0FFFF', ]
-        for i, cluster in enumerate(clusters):
-            cluster_x = [x_values[j] for j in cluster]
-            cluster_y = [y_values[j] for j in cluster]
-            ax.scatter(cluster_x, cluster_y, s=100, c=cluster_colors[i % len(cluster_colors)], alpha=0.7)
-            for point_idx in cluster:
-                ax.text(x_values[point_idx], y_values[point_idx], f"Cluster {i}, Node {point_idx}", fontsize=8, ha='center', va='top')
-
-    # Set the axis limits and labels
-    ax.set_xlim([min(x_values) - 1, max(x_values) + 1])
-    ax.set_ylim([min(y_values) - 1, max(y_values) + 1])
-    ax.set_xlabel('X')
-    ax.set_ylabel('Y')
-    ax.set_title('Data Visualization')
-    
-    # Show the plot
-    plt.show()
-
-
-def plot_metrics(metrics, alpha, beta):
-    # Extract the data from the defaultdict
-    rounds = range(len(metrics['k-SACB-EC_energy']))
-    
-    # Define color and marker styles for each algorithm
-    colors = {
-        'k-SACB-EC': 'red',
-        'k-SACB-WEC': 'navy',
-        'NSAC': 'green',
-        'CogLEACH': 'blue'
-    }
-    markers = {
-        'k-SACB-EC': 'o',
-        'k-SACB-WEC': 's',
-        'NSAC': '^',
-        'CogLEACH': 'x'
-    }
-    
-    # Plot Energy Consumption over Time
-    plt.figure(figsize=(12, 6))
-    plt.plot(rounds, metrics['k-SACB-EC_energy'], label='k-SACB-EC Energy', 
-             color=colors['k-SACB-EC'], linestyle='-', marker=markers['k-SACB-EC'], linewidth=0.5, markersize=2)
-    plt.plot(rounds, metrics['k-SACB-WEC_energy'], label='k-SACB-WEC Energy', 
-             color=colors['k-SACB-WEC'], linestyle='-', marker=markers['k-SACB-WEC'], linewidth=0.5, markersize=2)
-    plt.plot(rounds, metrics['NSAC_energy'], label='NSAC Energy', 
-             color=colors['NSAC'], linestyle='-', marker=markers['NSAC'], linewidth=0.5, markersize=2)
-    plt.plot(rounds, metrics['CogLEACH_energy'], label='CogLEACH Energy', 
-             color=colors['CogLEACH'], linestyle='-', marker=markers['CogLEACH'], linewidth=0.5, markersize=2)
-    plt.title(f'Energy Consumption Over Time α:{alpha}, β:{beta}')
-    plt.xlabel('Rounds')
-    plt.ylabel('Energy')
-    plt.legend()
+    plt.xlabel('Number of rounds')
+    plt.ylabel('Network remaining energy')
+    plt.title(f'Network Remaining Energy (α={alpha}, β={beta})')
     plt.grid(True)
+    plt.legend()
     plt.show()
 
-    # Plot Number of Alive Nodes over Time
-    plt.figure(figsize=(12, 6))
-    plt.plot(rounds, metrics['k-SACB-EC_alive'], label='k-SACB-EC Alive Nodes', 
-             color=colors['k-SACB-EC'], linestyle='-', marker=markers['k-SACB-EC'], linewidth=1, markersize=4)
-    plt.plot(rounds, metrics['k-SACB-WEC_alive'], label='k-SACB-WEC Alive Nodes', 
-             color=colors['k-SACB-WEC'], linestyle='-', marker=markers['k-SACB-WEC'], linewidth=1, markersize=4)
-    plt.plot(rounds, metrics['NSAC_alive'], label='NSAC Alive Nodes', 
-             color=colors['NSAC'], linestyle='-', marker=markers['NSAC'], linewidth=1, markersize=4)
-    plt.plot(rounds, metrics['CogLEACH_alive'], label='CogLEACH Alive Nodes', 
-             color=colors['CogLEACH'], linestyle='-', marker=markers['CogLEACH'], linewidth=1, markersize=4)
-    plt.title('Alive Nodes Over Time')
-    plt.xlabel('Rounds')
-    plt.ylabel('Number of Alive Nodes')
-    plt.legend()
+def plot_first_node_death(results: Dict[str, int],
+                         alpha: float,
+                         beta: float):
+    """
+    Plot number of rounds before first node death (Figures 11-12)
+    
+    Args:
+        results: Dictionary mapping algorithm names to round numbers
+        alpha: PU departure rate
+        beta: PU arrival rate
+    """
+    plt.figure(figsize=(10, 6))
+    
+    algorithms = list(results.keys())
+    rounds = list(results.values())
+    
+    plt.bar(algorithms, rounds)
+    plt.xlabel('Algorithms')
+    plt.ylabel('Number of rounds')
+    plt.title(f'Number of Rounds Before First Node Dead (α={alpha}, β={beta})')
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.show()
+
+def visualize_clusters(nodes: List[Any], 
+                      clusters: List[Any], 
+                      title: str):
+    """
+    Visualize network topology with clusters (Required cluster visualization)
+    
+    Args:
+        nodes: List of nodes
+        clusters: List of clusters
+        title: Plot title
+    """
+    plt.figure(figsize=(12, 8))
+    
+    # Create graph for visualization
+    G = nx.Graph()
+    
+    # Add nodes
+    for node in nodes:
+        G.add_node(node.id, pos=(node.x, node.y))
+    
+    # Add edges within clusters
+    colors = plt.cm.rainbow(np.linspace(0, 1, len(clusters)))
+    
+    for cluster_idx, cluster in enumerate(clusters):
+        cluster_color = colors[cluster_idx]
+        
+        # Draw cluster members
+        member_positions = {
+            node.id: (node.x, node.y) for node in cluster.members
+        }
+        
+        # Draw connections to CH
+        for member in cluster.members:
+            if member != cluster.ch:
+                G.add_edge(cluster.ch.id, member.id)
+    
+        # Draw nodes
+        nx.draw_networkx_nodes(
+            G, member_positions, 
+            nodelist=member_positions.keys(),
+            node_color=[cluster_color],
+            node_size=500
+        )
+        
+        # Highlight CH
+        nx.draw_networkx_nodes(
+            G, {cluster.ch.id: (cluster.ch.x, cluster.ch.y)},
+            nodelist=[cluster.ch.id],
+            node_color=[cluster_color],
+            node_size=800,
+            node_shape='s'  # square for CH
+        )
+    
+    # Draw edges
+    nx.draw_networkx_edges(G, nx.get_node_attributes(G, 'pos'))
+    
+    # Add labels
+    labels = {node.id: f"N{node.id}" for node in nodes}
+    nx.draw_networkx_labels(G, nx.get_node_attributes(G, 'pos'), labels)
+    
+    plt.title(title)
+    plt.axis('on')
     plt.grid(True)
     plt.show()

@@ -1,118 +1,196 @@
-from copy import deepcopy
-from utility_functions import MWCBG, get_k_hop_neighbors
+# k_sacb_wec.py
+
+from typing import List, Set, Tuple
+from dataclasses import dataclass
+from simulation_environment import Node, CRSNEnvironment
+from mwcbg import find_MWCBG
+import networkx as nx
 
 
-class kSACBWEC:
-    def __init__(self, num_sus, edges, su_positions, su_channels, channel_qualities,  get_available_channels, initial_energy, k_max=5, preference_factor=0.5, sensing_energy=1.31e-4):
-        """
-        Initialize the k-SACB-WEC algorithm with the given parameters.
-        """
-        self.num_sus = num_sus
-        self.su_positions = su_positions
-        self.su_channels = deepcopy(su_channels)
-        self.original_edges = deepcopy(edges)
-        self.original_channels = deepcopy(su_channels)
-        self.su_energies = {i: initial_energy for i in range(self.num_sus)}
-        self.channel_qualities = channel_qualities
-        self.edges = edges
-        self.get_available_channels = get_available_channels
-        self.k_max = k_max
-        self.preference_factor = preference_factor
-        self.sensing_energy = sensing_energy
-        self.clusters = []
-        self.visited = set()
+@dataclass
+class HopBasedCluster:
+    """Represents a cluster with specific hop count in the network"""
 
-    def consume_energy(self, node, energy_amount):
-        """
-        Deduct energy from a given node's energy budget.
-        """
-        self.su_energies[node] -= energy_amount
-        if self.su_energies[node] < 0:
-            self.su_energies[node] = 0
+    id: int
+    ch: Node  # Cluster Head
+    members: Set[Node]  # Cluster Members
+    common_channels: Set[int]  # Common channels for all nodes in cluster
+    hop_count: int  # Number of hops for this cluster
 
-    def reset(self):
-        self.clusters = []
-        self.cluster_heads = []
-        self.visited = set()
 
-    def form_clusters(self):
+class KSABWEC:
+    """Implementation of k-hop Spectrum Aware clustering Without Edge Contraction"""
+
+    def __init__(self, env: CRSNEnvironment):
         """
-        Main function to execute the k-SACB-WEC clustering algorithm with energy consumption.
+        Initialize k-SACB-WEC algorithm
+
+        Args:
+            env: CRSN simulation environment
         """
-        for node in range(self.num_sus):
-            if node in self.visited or self.su_energies[node] <= 0:
+        self.env = env
+        self.clusters: List[HopBasedCluster] = []
+        self.cluster_id_counter = 0
+        self.network_graph = nx.Graph()
+        self._initialize_network_graph()
+
+    def _initialize_network_graph(self):
+        """Initialize network graph from environment nodes"""
+        # Add nodes
+        for node in self.env.nodes:
+            self.network_graph.add_node(node)
+
+        # Add edges where nodes have common channels
+        for node1 in self.env.nodes:
+            for node2 in self.env.nodes:
+                if node1 != node2:
+                    common_channels = (
+                        node1.available_channels & node2.available_channels
+                    )
+                    if len(common_channels) >= 2:  # Bi-channel connectivity requirement
+                        distance = node1.calculate_distance(node2)
+                        if distance <= node1.transmission_range:
+                            self.network_graph.add_edge(node1, node2)
+
+    def _get_k_hop_neighbors(self, node: Node, k: int) -> Set[Node]:
+        """Get all neighbors within k hops of the node"""
+        neighbors = set()
+        current_nodes = {node}
+
+        for hop in range(k):
+            next_nodes = set()
+            for current in current_nodes:
+                next_nodes.update(self.network_graph.neighbors(current))
+            next_nodes -= neighbors  # Remove already found neighbors
+            next_nodes.discard(node)  # Remove source node
+            neighbors.update(next_nodes)
+            current_nodes = next_nodes
+
+        return neighbors
+
+    def _find_optimal_hop_count(
+        self, node: Node, max_hops: int
+    ) -> Tuple[int, float, Set[Node], Set[int]]:
+        """
+        Find optimal hop count for a node that maximizes clustering weight
+
+        Returns:
+            Tuple of (optimal_hop_count, max_weight, best_nodes, best_channels)
+        """
+        best_hop_count = 1
+        max_weight = 0.0
+        best_nodes = set()
+        best_channels = set()
+
+        for k in range(1, max_hops + 1):
+            # Get k-hop neighbors
+            k_hop_neighbors = self._get_k_hop_neighbors(node, k)
+            if not k_hop_neighbors:
                 continue
 
-            best_cluster = set()
-            best_weight = 0
-            current_k = 1
-            previous_neighbors = set()
+            # Find maximum weight complete bipartite subgraph
+            # Verify common channels across all k-hop neighbors before MWCBG
+            common_channels = node.available_channels.copy()
+            for neighbor in k_hop_neighbors:
+                common_channels &= neighbor.available_channels
 
-            # Expand up to k_max to find the optimal cluster
-            while current_k <= self.k_max:
-                k_hop_neighbors = get_k_hop_neighbors(
-                    node, self.edges, current_k)
-                # print("current_k :", current_k, " k_max :", self.k_max)
-                # If the set of neighbors doesn't change, break early
-                if k_hop_neighbors == previous_neighbors:
-                    break
-                previous_neighbors = k_hop_neighbors
+            if (
+                len(common_channels) >= 2
+            ):  # Only proceed if we have bi-channel connectivity
+                result = find_MWCBG(
+                    node=node,
+                    channels=common_channels,  # Use only verified common channels
+                    neighbors=k_hop_neighbors,
+                )
+            else:
+                break
 
-                # Prepare neighbor data using available channels
-                neighbor_data = {
-                    neighbor: {
-                        "position": self.su_positions[neighbor],
-                        "channels": self.get_available_channels(neighbor)
-                    }
-                    for neighbor in k_hop_neighbors
-                }
+            if result.weight > max_weight and len(result.channels) >= 2:
+                max_weight = result.weight
+                best_hop_count = k
+                best_nodes = result.nodes
+                best_channels = result.channels
 
-                node_position = self.su_positions[node]
-                channels_i = self.get_available_channels(node)
+        return best_hop_count, max_weight, best_nodes, best_channels
 
-                # Step 2: Calculate MWCBG for the current k-hop neighborhood
-                selected_channels, cluster, cluster_weight = MWCBG(
-                    node, node_position, channels_i, k_hop_neighbors, neighbor_data, self.channel_qualities
+    def _form_cluster(
+        self, ch: Node, members: Set[Node], channels: Set[int], hop_count: int
+    ) -> HopBasedCluster:
+        """Form a cluster with given parameters"""
+        cluster = HopBasedCluster(
+            id=self.cluster_id_counter,
+            ch=ch,
+            members=members | {ch},
+            common_channels=channels,
+            hop_count=hop_count,
+        )
+
+        self.cluster_id_counter += 1
+
+        # Update node states
+        ch.state = "clustered_CH"
+        for member in members:
+            member.state = "clustered_CM"
+
+        return cluster
+
+    def form_clusters(self, max_hops: int = 2) -> List[HopBasedCluster]:
+        """
+        Form k-hop clusters without edge contraction
+
+        Args:
+            max_hops: Maximum number of hops allowed in clusters
+
+        Returns:
+            List of formed clusters
+        """
+        unclustered_nodes = set(self.network_graph.nodes())
+
+        while unclustered_nodes:
+            # Find node with best clustering potential
+            best_node = None
+            best_hop_count = 0
+            max_weight = 0.0
+            best_members = set()
+            best_channels = set()
+
+            for node in unclustered_nodes:
+                hop_count, weight, members, channels = self._find_optimal_hop_count(
+                    node, max_hops
                 )
 
-                # Stop expanding if no improvement is found
-                if not cluster or (cluster_weight <= best_weight and len(cluster) <= len(best_cluster)):
-                    break
+                # Only consider members that are still unclustered
+                members &= unclustered_nodes
+                if members and weight > max_weight:
+                    best_node = node
+                    best_hop_count = hop_count
+                    max_weight = weight
+                    best_members = members
+                    best_channels = channels
 
-                best_cluster = cluster
-                best_weight = cluster_weight
-                current_k += 1
+            if best_node is None:
+                # No more clusters can be formed
+                break
 
-            # Deduct energy for clustering process
-            self.consume_energy(node, self.sensing_energy)
+            # Form cluster with optimal parameters
+            cluster = self._form_cluster(
+                ch=best_node,
+                members=best_members,
+                channels=best_channels,
+                hop_count=best_hop_count,
+            )
 
-            # Deduct energy for each member in the cluster
-            if best_cluster:
-                for clstr in best_cluster:
-                    self.consume_energy(clstr[0], energy_amount=0.0005)
+            self.clusters.append(cluster)
 
-                self.clusters.append({clstr[0] for clstr in best_cluster})
-                self.visited.update({clstr[0] for clstr in best_cluster})
+            # Remove clustered nodes from unclustered set
+            unclustered_nodes -= cluster.members
+
+        # Handle remaining unclustered nodes
+        for node in unclustered_nodes:
+            # Form single-node clusters
+            cluster = self._form_cluster(
+                ch=node, members=set(), channels=node.available_channels, hop_count=0
+            )
+            self.clusters.append(cluster)
 
         return self.clusters
-
-    def select_cluster_heads(self):
-        """
-        Select Cluster Heads (CH) for each cluster.
-        """
-        cluster_heads = []
-        for cluster in self.clusters:
-            node_ids = list(cluster)
-            if node_ids:
-                # Select the cluster head with the highest y-coordinate
-                ch = max(node_ids, key=lambda n: self.su_positions[n][1])
-                cluster_heads.append(ch)
-        return cluster_heads
-
-    def run(self):
-        """
-        Execute the algorithm and return the clusters and their cluster heads.
-        """
-        clusters = self.form_clusters()
-        cluster_heads = self.select_cluster_heads()
-        return clusters, cluster_heads

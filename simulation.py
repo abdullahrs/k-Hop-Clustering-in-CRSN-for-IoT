@@ -1,179 +1,144 @@
-from collections import defaultdict
-from comparison_algorithms import NSAC, CogLEACH
-from constants import RANDOM_SEED
-from k_SACB_EC import kSACBEC
-from k_SACB_WEC import kSACBWEC
-from utility_functions import assign_channels, calculate_channel_qualities, calculate_edges
-from copy import deepcopy
-import numpy as np
-import random
+# simulation_runner.py
 
+from typing import Dict, Any, Tuple
+from simulation_environment import CRSNEnvironment
+from energy_management import EnergyManager, EnergyParameters
+from k_sacb_ec import KSABEC
+from k_sacb_wec import KSABWEC
+from visualization import plot_network_energy, plot_first_node_death, visualize_clusters
 
-class Replication:
-    def __init__(self, simulation_area=(300, 300), num_sus=80, num_channels=10, alpha=2, beta=2, rounds=900, su_transmission_range=40, initial_energy=0.2, sensing_energy=1.31e-4, communication_energy=50e-9):
-        self.simulation_area = simulation_area
-        self.num_sus = num_sus
-        self.nodes = [i for i in range(self.num_sus)]
+class SimulationRunner:
+    """Runs simulations and collects data for different algorithms"""
+    
+    def __init__(self, num_nodes: int = 100, num_channels: int = 10):
+        self.num_nodes = num_nodes
         self.num_channels = num_channels
-        self.alpha = alpha
-        self.beta = beta
-        self.rounds = rounds
-        self.su_transmission_range = su_transmission_range
-        self.initial_energy = initial_energy
-        self.sensing_energy = sensing_energy
-        self.communication_energy = communication_energy
-        self.metrics = defaultdict(list)
-        self.initialize_environment()
-
-    def initialize_environment(self):
-        """
-        Initialize SU positions, channels, and energies.
-        """
-        random.seed(RANDOM_SEED)
-        np.random.seed(RANDOM_SEED)
-
-        self.su_positions = {
-            i: (np.random.uniform(0, self.simulation_area[0]), np.random.uniform(
-                0, self.simulation_area[1]))
-            for i in range(self.num_sus)
+        self.energy_params = EnergyParameters()
+        
+    def setup_environment(self, alpha: float, beta: float) -> Tuple[CRSNEnvironment, EnergyManager]:
+        """Setup simulation environment with given parameters"""
+        params = {
+            "NUM_SUS": self.num_nodes,
+            "NUM_CHANNELS": self.num_channels,
+            "PU_ALPHA_RANGE": (alpha, alpha),  # Fixed alpha
+            "PU_BETA_RANGE": (beta, beta),     # Fixed beta
         }
-        self.su_channels = assign_channels(self.num_sus, self.num_channels)
-        self.su_energies = {
-            i: self.initial_energy for i in range(self.num_sus)}
-        self.channel_qualities = calculate_channel_qualities(self.num_channels)
-        self.edges = calculate_edges(
-            self.nodes, self.su_positions, self.su_channels, self.su_transmission_range)
-        # Initialize channel states and timers with random values
-        self.channel_states = {
-            ch: 'OFF' for ch in range(self.num_channels)
+        
+        env = CRSNEnvironment(params)
+        energy_manager = EnergyManager(env.nodes, self.energy_params)
+        return env, energy_manager
+    
+    def run_single_algorithm(self, 
+                           algo_class: Any, 
+                           env: CRSNEnvironment,
+                           energy_manager: EnergyManager,
+                           max_rounds: int = 900) -> Dict:
+        """
+        Run simulation for a single algorithm
+        
+        Returns:
+            Dictionary containing:
+            - energy_history: List of network energy values
+            - alive_nodes_history: List of alive node counts
+            - first_death_round: Round when first node died
+            - clusters: Final cluster configuration
+        """
+        algorithm = algo_class(env)
+        clusters = algorithm.form_clusters()
+        
+        energy_history = []
+        alive_nodes_history = []
+        
+        for _ in range(max_rounds):
+            # Record current state
+            energy_history.append(energy_manager.get_network_energy())
+            alive_nodes_history.append(energy_manager.get_alive_nodes_count())
+            
+            # Run one round
+            energy_manager.consume_energy_for_round(clusters)
+            
+            # Check if all nodes are dead
+            if energy_manager.get_alive_nodes_count() == 0:
+                break
+        
+        return {
+            'energy_history': energy_history,
+            'alive_nodes_history': alive_nodes_history,
+            'first_death_round': energy_manager.first_node_death_round,
+            'clusters': clusters
         }
-        self.channel_timers = {
-            ch: np.random.exponential(
-                self.alpha if self.channel_states[ch] == 'OFF' else self.beta)
-            for ch in range(self.num_channels)
-        }
-
-    def update_channel_states(self):
+    
+    def run_comparison(self, 
+                      alpha: float, 
+                      beta: float,
+                      max_rounds: int = 900) -> Dict:
         """
-        Update the state of each channel (ON/OFF) based on alpha and beta values.
+        Run comparison of all algorithms
+        
+        Returns:
+            Dictionary containing results for each algorithm
         """
-        print("BEFORE UPDATE : self.channel_states :", self.channel_states)
-        print("BEFORE UPDATE : self.channel_timers :", self.channel_timers)
-        for ch in range(self.num_channels):
-            # If the timer is zero or less, switch the channel state
-            if self.channel_timers[ch] <= 0:
-                if self.channel_states[ch] == 'ON':
-                    # Switch to 'OFF' and set a new timer using beta
-                    self.channel_states[ch] = 'OFF'
-                    self.channel_timers[ch] = np.random.exponential(self.beta)
-                else:
-                    # Switch to 'ON' and set a new timer using alpha
-                    self.channel_states[ch] = 'ON'
-                    self.channel_timers[ch] = np.random.exponential(self.alpha)
-            else:
-                # Decrease the timer for channels that are still active
-                self.channel_timers[ch] -= 1
-        print("AFTER UPDATE : self.channel_states :", self.channel_states)
-        print("AFTER UPDATE : self.channel_timers :", self.channel_timers)
-
-    def get_available_channels(self, node):
-        """
-        Return channels that are currently OFF (available) for a given node.
-        """
-        channels = self.su_channels[node]
-        available_channels = {
-            ch for ch in channels if self.channel_states[ch] == 'OFF'}
-        return available_channels
-
-    def simulate_rounds(self):
-        """
-        Run all algorithms for multiple rounds and collect metrics.
-        """
+        # Setup environment
+        env, energy_manager = self.setup_environment(alpha, beta)
+        
         algorithms = {
-            'k-SACB-EC': kSACBEC,
-            'k-SACB-WEC': kSACBWEC,
-            'NSAC': NSAC,
-            'CogLEACH': CogLEACH
+            'k-SACB-EC': KSABEC,
+            'k-SACB-WEC': KSABWEC,
+            # Add other algorithms here when implemented
         }
-
+        
+        results = {}
+        
         for algo_name, algo_class in algorithms.items():
-            print(f"Running {algo_name}...")
-            algo_instance = self.initialize_algorithm(algo_class)
-
-            for round_num in range(self.rounds):
-                print(f"Running {algo_name} round {round_num}...")
-                self.update_channel_states()
-                clusters, cluster_heads = algo_instance.run()
-                print(f"<{round_num}> clusters : {clusters}")
-                # return
-
-                remaining_energy = sum(algo_instance.su_energies.values())
-                print(f"<{round_num}> remaining_energy :",remaining_energy)
-                alive_nodes = sum(
-                    1 for e in algo_instance.su_energies.values() if e > 0)
-                print(f"<{round_num}> alive_nodes :",alive_nodes)
-                # Store metrics
-                self.metrics[f"{algo_name}_energy"].append(remaining_energy)
-                self.metrics[f"{algo_name}_alive"].append(alive_nodes)
-                algo_instance.reset()
-
-    def initialize_algorithm(self, algo_class):
-        """
-        Initialize the specified algorithm class with the current simulation state.
-        """
-        print("Initial SU Channels :", self.su_channels)
-        if algo_class == kSACBEC:
-            return kSACBEC(
-                nodes=self.nodes,
-                edges=self.edges,
-                channels=deepcopy(self.su_channels),
-                su_positions=self.su_positions,
-                channel_qualities=self.channel_qualities,
-                su_transmission_range=self.su_transmission_range,
-                get_available_channels=self.get_available_channels,
-                initial_energy=self.initial_energy,
-                sensing_energy=self.sensing_energy,
+            # Reset environment for each algorithm
+            energy_manager.reset()
+            
+            # Run algorithm
+            results[algo_name] = self.run_single_algorithm(
+                algo_class, env, energy_manager, max_rounds
             )
-        elif algo_class == kSACBWEC:
-            return kSACBWEC(
-                num_sus=self.num_sus,
-                su_positions=self.su_positions,
-                initial_energy=self.initial_energy,
-                su_channels=deepcopy(self.su_channels),
-                channel_qualities=self.channel_qualities,
-                edges=self.edges,
-                get_available_channels=self.get_available_channels,
-                preference_factor=0.5
+            
+            # Visualize clusters for this algorithm
+            visualize_clusters(
+                env.nodes,
+                results[algo_name]['clusters'],
+                f'Cluster Formation - {algo_name} (α={alpha}, β={beta})'
             )
-        elif algo_class == NSAC:
-            return NSAC(
-                num_sus=self.num_sus,
-                su_positions=self.su_positions,
-                su_channels=deepcopy(self.su_channels),
-                channel_qualities=self.channel_qualities,
-                get_available_channels=self.get_available_channels,
-                edges=self.edges,
-                preference_factor=0.5,
-                initial_energy=self.initial_energy,
-                sensing_energy=self.sensing_energy,
-            )
-        elif algo_class == CogLEACH:
-            return CogLEACH(
-                nodes=self.nodes,
-                num_sus=self.num_sus,
-                su_positions=self.su_positions,
-                su_channels=deepcopy(self.su_channels),
-                channel_qualities=self.channel_qualities,
-                su_transmission_range=self.su_transmission_range,
-                get_available_channels=self.get_available_channels,
-                initial_energy=self.initial_energy,
-                sensing_energy=self.sensing_energy
-            )
+        
+        # Generate energy comparison plot
+        plot_network_energy(
+            {name: res['energy_history'] for name, res in results.items()},
+            alpha, beta
+        )
+        
+        # Generate first node death comparison plot
+        plot_first_node_death(
+            {name: res['first_death_round'] for name, res in results.items()},
+            alpha, beta
+        )
+        
+        return results
 
-    def run(self):
-        """
-        Execute the simulation for all algorithms.
-        """
-        self.simulate_rounds()
-        print("Simulation complete.")
-        return self.metrics
+def run_simulations():
+    """Run all required simulations for paper results"""
+    runner = SimulationRunner(num_nodes=100, num_channels=10)
+    
+    # Scenarios from paper
+    scenarios = [
+        (2.0, 2.0),  # Figures 7,11
+        (2.0, 0.5),  # Figures 8,12
+        (0.5, 2.0),  # Figures 9,13
+        (0.5, 0.5)   # Figures 10,14
+    ]
+    
+    for alpha, beta in scenarios:
+        print(f"\nRunning simulation for α={alpha}, β={beta}")
+        results = runner.run_comparison(alpha, beta)
+        print(f"Results for α={alpha}, β={beta}:")
+        for algo_name, algo_results in results.items():
+            print(f"\n{algo_name}:")
+            print(f"First node death round: {algo_results['first_death_round']}")
+            print(f"Final alive nodes: {algo_results['alive_nodes_history'][-1]}")
+
+if __name__ == "__main__":
+    run_simulations()

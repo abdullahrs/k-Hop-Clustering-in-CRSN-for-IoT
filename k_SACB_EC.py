@@ -1,161 +1,213 @@
-from copy import deepcopy
-from math import sqrt
-from utility_functions import MWCBG, get_k_hop_neighbors
+# k_sacb_ec.py
 
+from typing import List, Set
+from dataclasses import dataclass
+from simulation_environment import Node, CRSNEnvironment
+from mwcbg import find_MWCBG
+import networkx as nx
 
-class kSACBEC:
-    def __init__(self, nodes, edges, channels, su_positions, channel_qualities, su_transmission_range, get_available_channels, initial_energy, sensing_energy=1.31e-4, k=2):
-        self.nodes = nodes
-        self.edges = deepcopy(edges)
-        self.channels = deepcopy(channels)
-        self.original_edges = deepcopy(edges)
-        self.original_channels = deepcopy(channels)
-        self.su_positions = su_positions
-        self.channel_qualities = channel_qualities
-        self.su_energies = {node: initial_energy for node in self.nodes}
-        self.su_transmission_range = su_transmission_range
-        self.k = k
-        self.node_states = {node: 'initial' for node in nodes}
-        self.clusters = []
-        self.cluster_heads = []
-        self.sensing_energy = sensing_energy
-        self.get_available_channels = get_available_channels
+@dataclass
+class Cluster:
+    """Represents a cluster in the network"""
+    id: int
+    ch: Node                     # Cluster Head
+    members: Set[Node]          # Cluster Members
+    common_channels: Set[int]    # Common channels for all nodes in cluster
 
-    def consume_energy(self, node, energy_amount):
-        """Reduce the energy of a given node by a specified amount."""
-        self.su_energies[node] -= energy_amount
-        if self.su_energies[node] < 0:
-            self.su_energies[node] = 0
-
-    def reset(self):
-        self.node_states = {node: 'initial' for node in self.nodes}
-        self.clusters = []
-        self.cluster_heads = []
-        self.channels = deepcopy(self.original_channels)
-        self.edges = deepcopy(self.original_edges)
-
-    def form_clusters(self):
+class KSABEC:
+    """Implementation of k-hop Spectrum Aware clustering with Edge Contraction"""
+    
+    def __init__(self, env: CRSNEnvironment):
         """
-        Execute the k-SACB-EC clustering algorithm with correct energy consumption.
+        Initialize k-SACB-EC algorithm
+        
+        Args:
+            env: CRSN simulation environment
         """
-        while any(state == 'initial' for state in self.node_states.values()):
-            progress_made = False
-            for node in self.nodes:
-                # Skip nodes that are already clustered or have no energy
-                if self.node_states[node] in {'clustered_CM', 'clustered_CH'} or self.su_energies[node] <= 0:
+        self.env = env
+        self.clusters: List[Cluster] = []
+        self.cluster_id_counter = 0
+        self.network_graph = nx.Graph()
+        self._initialize_network_graph()
+        
+    def _initialize_network_graph(self):
+        """Initialize network graph from environment nodes"""
+        # Add nodes
+        for node in self.env.nodes:
+            self.network_graph.add_node(node)
+        
+        # Add edges where nodes have common channels
+        for node1 in self.env.nodes:
+            for node2 in self.env.nodes:
+                if node1 != node2:
+                    common_channels = node1.available_channels & node2.available_channels
+                    if len(common_channels) >= 2:  # Bi-channel connectivity requirement
+                        distance = node1.calculate_distance(node2)
+                        if distance <= node1.transmission_range:
+                            self.network_graph.add_edge(node1, node2)
+    
+    def _contract_edge(self, cluster: Cluster):
+        """
+        Perform edge contraction for a cluster in the network graph
+        """
+        # Get all neighbors of cluster members before removal
+        cluster_neighbors = set()
+        for member in cluster.members:
+            if member != cluster.ch:
+                cluster_neighbors.update(set(self.network_graph.neighbors(member)))
+        
+        # Remove all cluster members except CH at once
+        self.network_graph.remove_nodes_from(
+            [n for n in cluster.members if n != cluster.ch]
+        )
+        
+        # Add edges to CH in batch
+        new_edges = [
+            (cluster.ch, neighbor) for neighbor in cluster_neighbors 
+            if (neighbor not in cluster.members and 
+                len(cluster.common_channels & neighbor.available_channels) >= 2)
+        ]
+        self.network_graph.add_edges_from(new_edges)
+    
+    def _form_initial_clusters(self) -> List[Cluster]:
+        """
+        Form initial clusters using MWCBG procedure
+        
+        Returns:
+            List of formed clusters
+        """
+        initial_clusters = []
+        unclustered_nodes = set(self.network_graph.nodes())
+        
+        while unclustered_nodes:
+            # Select node with highest weight among unclustered nodes
+            current_node = None
+            max_weight = -1
+            
+            for node in unclustered_nodes:
+                neighbors = set(self.network_graph.neighbors(node))
+                if not neighbors:
                     continue
-
-                participants_i = set()
-                intermediate_cluster_i = set()
-                node_position = self.su_positions[node]
-
-                # Step 1: Get k-hop neighbors and consume energy for sensing
-                k_hop_neighbors = get_k_hop_neighbors(node, self.edges, self.k)
-                self.consume_energy(node, self.sensing_energy)
-                if self.su_energies[node] <= 0:
-                    continue
-
-                # Prepare neighbor data
-                node_edges = [
-                    (neighbor, common_channels)
-                    for node_i, neighbor, common_channels in self.edges
-                    if node_i == node and neighbor in k_hop_neighbors
-                ]
-                neighbor_data = {
-                    neighbor: {
-                        "position": self.su_positions[neighbor],
-                        "channels": self.get_available_channels(neighbor)
-                    }
-                    for neighbor, neighbor_channels in node_edges
-                }
-
-                available_channels = self.get_available_channels(node)
-
-                # Neighbor selection step - adding neighbors to participants if they are in initial state and share channels
-                for neighbor, neighbor_channels in node_edges:
-                    dx = self.su_positions[neighbor][0] - node_position[0]
-                    dy = self.su_positions[neighbor][1] - node_position[1]
-                    distance = sqrt(dx**2 + dy**2)
-
-                    if (
-                        self.node_states[neighbor] not in {'clustered_CM', 'clustered_CH'} and
-                        neighbor_channels.intersection(available_channels) and
-                        distance <= self.su_transmission_range
-                    ):
-                        participants_i.add(neighbor)
-
-                # Step 3: Bipartite Graph Construction and Maximum Weight Calculation using MWCBG
-                cmn_i, PCM_i, w_i = MWCBG(
-                    node, node_position, available_channels, participants_i, neighbor_data, self.channel_qualities
+                    
+                result = find_MWCBG(
+                    node=node,
+                    channels=node.available_channels,
+                    neighbors=neighbors & unclustered_nodes
                 )
-
-                # Consume energy for performing MWCBG
-                self.consume_energy(node, self.sensing_energy)
-
-                # Step 4: Cluster Head Selection
-                if len(cmn_i) >= 2 and PCM_i:
-                    if self.node_states[node] == 'initial':
-                        self.node_states[node] = 'intermediate_CH'
-                        CM_i = {p[0] for p in PCM_i}
-
-                        # Send 'join' message to each member in CM_i
-                        for member in CM_i:
-                            if self.node_states[member] == 'initial':
-                                self.consume_energy(
-                                    member, self.sensing_energy)
-                                self.node_states[member] = 'clustered_CM'
-                                progress_made = True
-                                intermediate_cluster_i.add(member)
-
-                # Step 5: Edge Contraction
-                contracted_node = node
-                new_edges = []
-                for member in intermediate_cluster_i:
-                    for edge in self.edges:
-                        if edge[0] == member and edge[1] != contracted_node:
-                            new_edges.append(
-                                (contracted_node, edge[1], edge[2]))
-                        elif edge[1] == member and edge[0] != contracted_node:
-                            new_edges.append(
-                                (edge[0], contracted_node, edge[2]))
-
-                    # Remove old member edges
-                    self.edges = [
-                        edge for edge in self.edges if edge[0] != member and edge[1] != member]
-
-                    # Consume energy for contracting edges
-                    self.consume_energy(member, self.sensing_energy)
-
-                self.edges += new_edges
-                self.channels[contracted_node] = cmn_i.copy()
-
-                # Step 6: Finalize Cluster
-                if len(cmn_i) < 2 or not any(w_i > weight for _, _, weight in PCM_i):
-                    self.node_states[node] = 'clustered_CH'
-                    final_cluster = intermediate_cluster_i | {node}
-                    self.clusters.append(final_cluster)
-                    self.cluster_heads.append(
-                        self.select_cluster_head(final_cluster))
-                    self.consume_energy(node, self.sensing_energy)
-            if not progress_made:
-                print("progress_made :",progress_made)
+                
+                if result.weight > max_weight:
+                    max_weight = result.weight
+                    current_node = node
+            
+            if current_node is None:
                 break
-        return self.clusters, self.cluster_heads
-
-    def select_cluster_head(self, cluster):
-        """Select the cluster head based on the highest residual energy."""
-        return max(cluster, key=lambda n: self.su_energies[n])
-
-    def validate_clusters(self):
-        """Validate that the formed clusters satisfy the requirements."""
+                
+            # Form cluster with selected node
+            neighbors = set(self.network_graph.neighbors(current_node))
+            result = find_MWCBG(
+                node=current_node,
+                channels=current_node.available_channels,
+                neighbors=neighbors & unclustered_nodes
+            )
+            
+            if result.nodes:  # If valid cluster can be formed
+                # Set up cluster head
+                current_node.set_as_cluster_head()
+                
+                # Add members to cluster
+                for member in result.nodes:
+                    member.join_cluster(current_node)
+                
+                cluster = Cluster(
+                    id=self.cluster_id_counter,
+                    ch=current_node,
+                    members=result.nodes | {current_node},
+                    common_channels=result.channels
+                )
+                initial_clusters.append(cluster)
+                self.cluster_id_counter += 1
+                
+                # Update node states
+                current_node.state = "clustered_CH"
+                for member in result.nodes:
+                    member.state = "clustered_CM"
+                
+                # Remove clustered nodes from unclustered set
+                unclustered_nodes -= cluster.members
+            else:
+                # If no valid cluster can be formed, make single node cluster
+                cluster = Cluster(
+                    id=self.cluster_id_counter,
+                    ch=current_node,
+                    members={current_node},
+                    common_channels=current_node.available_channels
+                )
+                initial_clusters.append(cluster)
+                self.cluster_id_counter += 1
+                current_node.state = "clustered_CH"
+                unclustered_nodes.remove(current_node)
+        
+        return initial_clusters
+    
+    def _merge_clusters(self, clusters: List[Cluster]) -> List[Cluster]:
+        """
+        Merge clusters where possible while maintaining bi-channel connectivity
+        
+        Args:
+            clusters: List of clusters to merge
+            
+        Returns:
+            List of merged clusters
+        """
+        merged = True
+        while merged:
+            merged = False
+            for i, cluster1 in enumerate(clusters):
+                for j, cluster2 in enumerate(clusters[i+1:], i+1):
+                    common_channels = cluster1.common_channels & cluster2.common_channels
+                    
+                    # Check if clusters can be merged
+                    if len(common_channels) >= 2:
+                        # Check if cluster heads are neighbors
+                        if self.network_graph.has_edge(cluster1.ch, cluster2.ch):
+                            # Merge clusters
+                            new_cluster = Cluster(
+                                id=self.cluster_id_counter,
+                                ch=cluster1.ch if cluster1.ch.residual_energy > cluster2.ch.residual_energy 
+                                   else cluster2.ch,
+                                members=cluster1.members | cluster2.members,
+                                common_channels=common_channels
+                            )
+                            
+                            self.cluster_id_counter += 1
+                            clusters.remove(cluster1)
+                            clusters.remove(cluster2)
+                            clusters.append(new_cluster)
+                            merged = True
+                            break
+                if merged:
+                    break
+                    
+        return clusters
+    
+    def form_clusters(self, max_hops: int = 2) -> List[Cluster]:
+        """
+        Form k-hop clusters using edge contraction
+        
+        Args:
+            max_hops: Maximum number of hops allowed in clusters
+            
+        Returns:
+            List of formed clusters
+        """
+        # Step 1: Form initial clusters
+        self.clusters = self._form_initial_clusters()
+        
+        # Step 2: Contract edges for each cluster
         for cluster in self.clusters:
-            if len(cluster) > 1:
-                common_channels = set.intersection(
-                    *(self.channels[node] for node in cluster))
-                assert len(
-                    common_channels) >= 2, "Cluster does not meet the common channels requirement"
-
-    def run(self):
-        clusters, cluster_heads = self.form_clusters()
-        self.validate_clusters()
-        return clusters, cluster_heads
+            self._contract_edge(cluster)
+            
+        # Step 3: Merge clusters while possible
+        self.clusters = self._merge_clusters(self.clusters)
+        
+        return self.clusters
