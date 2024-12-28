@@ -1,6 +1,8 @@
 # simulation_runner.py
 
 from typing import Dict, Any, Tuple
+import numpy as np
+from result_handler import ResultsHandler
 from simulation_environment import CRSNEnvironment
 from energy_management import EnergyManager, EnergyParameters
 from k_sacb_ec import KSABEC
@@ -27,12 +29,39 @@ class SimulationRunner:
         env = CRSNEnvironment(params)
         energy_manager = EnergyManager(env.nodes, self.energy_params)
         return env, energy_manager
-    
+    def should_recluster(self, clusters, energy_manager):
+        """
+        Determine if reclustering is needed based on energy levels and connectivity.
+
+        Args:
+            clusters: List of current clusters.
+            energy_manager: EnergyManager instance.
+
+        Returns:
+            True if reclustering is needed, False otherwise.
+        """
+        # Check if any cluster head is dead
+        for cluster in clusters:
+            if cluster.ch in energy_manager.dead_nodes:
+                print(f"Reclustering needed: CH {cluster.ch.id} is dead.")
+                return True
+
+        # Check if any cluster loses bi-channel connectivity
+        for cluster in clusters:
+            for member in cluster.members:
+                if not cluster.common_channels.issubset(member.available_channels):
+                    print(f"Reclustering needed: Connectivity issue in Cluster {cluster.id}.")
+                    return True
+
+        # No reclustering needed
+        print("No reclustering needed this round.")
+        return False
+
     def run_single_algorithm(self, 
                            algo_class: Any, 
                            env: CRSNEnvironment,
                            energy_manager: EnergyManager,
-                           max_rounds: int = 900) -> Dict:
+                           max_rounds: int = 2000) -> Dict:
         """
         Run simulation for a single algorithm
         
@@ -45,17 +74,22 @@ class SimulationRunner:
         """
         algorithm = algo_class(env)
         clusters = algorithm.form_clusters()
-        
         energy_history = []
         alive_nodes_history = []
         
-        for _ in range(max_rounds):
+        for round_idx in range(max_rounds):
             # Record current state
-            energy_history.append(energy_manager.get_network_energy())
-            alive_nodes_history.append(energy_manager.get_alive_nodes_count())
-            
+            total_energy = energy_manager.get_network_energy()
+            alive_nodes = energy_manager.get_alive_nodes_count()
+            energy_history.append(total_energy)
+            alive_nodes_history.append(alive_nodes)
             # Run one round
             energy_manager.consume_energy_for_round(clusters)
+            
+            # Check if reclustering is needed
+            if self.should_recluster(clusters, energy_manager):
+                print(f"Reclustering triggered in round {round_idx}.")
+                clusters = algorithm.form_clusters()
             
             # Check if all nodes are dead
             if energy_manager.get_alive_nodes_count() == 0:
@@ -71,7 +105,7 @@ class SimulationRunner:
     def run_comparison(self, 
                       alpha: float, 
                       beta: float,
-                      max_rounds: int = 900) -> Dict:
+                      max_rounds: int = 2000) -> Dict:
         """
         Run comparison of all algorithms
         
@@ -84,7 +118,6 @@ class SimulationRunner:
         algorithms = {
             'k-SACB-EC': KSABEC,
             'k-SACB-WEC': KSABWEC,
-            # Add other algorithms here when implemented
         }
         
         results = {}
@@ -119,26 +152,3 @@ class SimulationRunner:
         
         return results
 
-def run_simulations():
-    """Run all required simulations for paper results"""
-    runner = SimulationRunner(num_nodes=100, num_channels=10)
-    
-    # Scenarios from paper
-    scenarios = [
-        (2.0, 2.0),  # Figures 7,11
-        (2.0, 0.5),  # Figures 8,12
-        (0.5, 2.0),  # Figures 9,13
-        (0.5, 0.5)   # Figures 10,14
-    ]
-    
-    for alpha, beta in scenarios:
-        print(f"\nRunning simulation for α={alpha}, β={beta}")
-        results = runner.run_comparison(alpha, beta)
-        print(f"Results for α={alpha}, β={beta}:")
-        for algo_name, algo_results in results.items():
-            print(f"\n{algo_name}:")
-            print(f"First node death round: {algo_results['first_death_round']}")
-            print(f"Final alive nodes: {algo_results['alive_nodes_history'][-1]}")
-
-if __name__ == "__main__":
-    run_simulations()

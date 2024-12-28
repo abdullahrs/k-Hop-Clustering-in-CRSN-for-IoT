@@ -17,10 +17,12 @@ def plot_network_energy(results: Dict[str, List[float]],
         beta: PU arrival rate
     """
     plt.figure(figsize=(10, 6))
-    
+        
     for algo_name, energy_values in results.items():
-        plt.plot(range(len(energy_values)), energy_values, 
-                label=algo_name, marker='o', markersize=2)
+        color = 'red' if algo_name == 'k-SACB-EC' else 'navy' if algo_name == 'k-SACB-WEC' else 'black'
+        marker = '*' if algo_name == 'k-SACB-EC' else 'x' if algo_name == 'k-SACB-WEC' else 'o'
+        plt.plot(range(len(energy_values)), energy_values,
+                label=algo_name, marker=marker, markersize=2, color=color)
     
     plt.xlabel('Number of rounds')
     plt.ylabel('Network remaining energy')

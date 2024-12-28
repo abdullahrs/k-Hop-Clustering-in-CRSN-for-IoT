@@ -133,6 +133,7 @@ class MWCBG:
             return set()
             
         common = set(next(iter(nodes)).available_channels)
+        print("MWCBG common :", common)
         for node in nodes:
             common &= node.available_channels
             

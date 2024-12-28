@@ -124,11 +124,14 @@ class CRSNEnvironment:
         self.initialize_network()
         
     def initialize_network(self):
+        print(f"Simulation parameters: {self.params}")
         """Initialize the CRSN with randomly positioned nodes and channels"""
         # Initialize channels
         self._initialize_channels()
         # Initialize nodes
         self._initialize_nodes()
+        print(f"Initialized CRSN with {len(self.nodes)} nodes and {len(self.channels)} channels")
+        
         
     def _initialize_channels(self):
         """Initialize channels with PU activity parameters"""
