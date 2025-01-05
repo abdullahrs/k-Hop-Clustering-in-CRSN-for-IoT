@@ -1,186 +1,247 @@
-# mwcbg.py
-
-from typing import List, Set, Dict, Tuple, Optional
+from collections import defaultdict
+from itertools import combinations
 import networkx as nx
-from dataclasses import dataclass
-from simulation_environment import Node, Channel
 
-@dataclass
-class BipartiteGraphResult:
-    """Result structure for MWCBG procedure"""
-    nodes: Set[Node]          # Selected nodes in maximum weight complete bipartite subgraph
-    channels: Set[int]        # Common channels for selected nodes
-    weight: float            # Weight of the complete bipartite subgraph
+from typing import List, Set
+
+import numpy as np
+
+from base_models import Channel, Node
+
+
+
 
 class MWCBG:
-    """Maximum Weight Complete Bipartite Graph procedure implementation"""
-    
-    def __init__(self, node: Node, channels: Set[int], neighbors: Set[Node]):
-        """
-        Initialize MWCBG procedure
-        
-        Args:
-            node: Source node (i)
-            channels: Available channels at node i
-            neighbors: Set of node i's neighbors
-        """
-        self.source_node = node
-        self.available_channels = channels
-        self.neighbors = neighbors
-        self.graph = nx.Graph()
-        
-    def construct_bipartite_graph(self) -> nx.Graph:
-        """
-        Construct bipartite graph G(Ni ∪ Ci, Ei) as per paper
-        
-        Returns:
-            Constructed bipartite graph
-        """
-        # Add nodes to first partition (neighbors)
-        self.graph.add_nodes_from(self.neighbors, bipartite=0)
-        
-        # Add nodes to second partition (channels)
-        self.graph.add_nodes_from(self.available_channels, bipartite=1)
-        
-        # Add edges between neighbors and their available channels
-        for neighbor in self.neighbors:
-            for channel in self.available_channels:
-                if channel in neighbor.available_channels:
-                    self.graph.add_edge(neighbor, channel)
-                    
-        return self.graph
-        
-    def find_maximum_weight_complete_bipartite(self) -> BipartiteGraphResult:
-        """
-        Find maximum weight complete bipartite subgraph
-        
-        Returns:
-            BipartiteGraphResult containing selected nodes, channels and weight
-        """
-        if not self.neighbors or not self.available_channels:
-            return BipartiteGraphResult(set(), set(), 0.0)
-            
-        # Get all possible combinations of nodes and channels
-        max_weight = 0.0
-        best_nodes = set()
-        best_channels = set()
-        
-        # Try all possible subsets of neighbors
-        for n in range(1, len(self.neighbors) + 1):
-            for node_subset in self._get_subsets(self.neighbors, n):
-                # Find common channels for this subset
-                common_channels = self._get_common_channels(node_subset)
-                
-                if len(common_channels) >= 2:  # Bi-channel connectivity requirement
-                    weight = self._calculate_subgraph_weight(node_subset, common_channels)
-                    
-                    if weight > max_weight:
-                        max_weight = weight
-                        best_nodes = set(node_subset)
-                        best_channels = common_channels
-                        
-        return BipartiteGraphResult(best_nodes, best_channels, max_weight)
-    
-    def find_maximum_weight_complete_bipartite(self) -> BipartiteGraphResult:
-        """
-        Find maximum weight complete bipartite subgraph using NetworkX
-        """
-        if not self.neighbors or not self.available_channels:
-            return BipartiteGraphResult(set(), set(), 0.0)
+    def __init__(self, preference_factor: float = 0.5):
+        self.preference_factor = preference_factor
 
-        # Get the bipartite graph
-        G = self.construct_bipartite_graph()
-        
-        max_weight = 0.0
-        best_nodes = set()
-        best_channels = set()
-        
-        # Get node sets from bipartite graph
-        nodes_set = {n for n, d in G.nodes(data=True) if d['bipartite'] == 0}
-        channels_set = {n for n, d in G.nodes(data=True) if d['bipartite'] == 1}
-        
-        # Use maximum biclique algorithm if available in NetworkX
-        # Otherwise, use our optimized approach
-        for node_subset in nx.enumerate_all_cliques(nx.bipartite.projected_graph(G, nodes_set)):
-            if len(node_subset) < 1:
+    def find_maximum_subgraph(
+        self, node: "Node", available_channels: Set["Channel"], neighbors: List["Node"]
+    ):
+        if not neighbors or not available_channels or not node:
+            return None, None, float("-inf")
+
+        G = nx.Graph()
+        G.add_nodes_from(neighbors, bipartite=0)  # Neighbors
+        G.add_nodes_from(available_channels, bipartite=1)  # Channels
+
+        if len(neighbors) == 1 and len(available_channels) >= 2:
+            return (
+                available_channels,
+                neighbors,
+                self._calculate_weight(node, neighbors, available_channels),
+            )
+        # print("neighbors :", len(neighbors))
+        for neighbor in neighbors:
+            # Filter available_channels for this neighbor
+            # Intersection ensures only valid channels
+            neighbor_channels = neighbor.channels & available_channels
+            for channel in neighbor_channels:
+                G.add_edge(neighbor, channel)
+
+        # Project onto neighbors (set 0)
+        projected_graph = nx.bipartite.projected_graph(G, neighbors)
+
+        subgraphs = nx.enumerate_all_cliques(projected_graph)
+
+        max_weight = float("-inf")
+        best_subgraph = None
+        best_common_channels = None
+
+        for subgraph in subgraphs:
+            if len(subgraph) < 2:
                 continue
-                
-            # Find common channels for this subset
-            common_channels = set.intersection(*[set(G.neighbors(n)) for n in node_subset])
-            
-            if len(common_channels) >= 2:  # Bi-channel connectivity requirement
-                weight = self._calculate_subgraph_weight(set(node_subset), common_channels)
-                
-                if weight > max_weight:
-                    max_weight = weight
-                    best_nodes = set(node_subset)
-                    best_channels = common_channels
-        
-        return BipartiteGraphResult(best_nodes, best_channels, max_weight)
-    
-    
-    def _get_subsets(self, items: Set, n: int) -> List[Set]:
-        """Get all possible subsets of size n from items"""
-        if n == 0:
-            return [set()]
-        return [set(subset) | {item} 
-                for item in items 
-                for subset in self._get_subsets(items - {item}, n-1)]
-    
-    def _get_common_channels(self, nodes: Set[Node]) -> Set[int]:
-        """Find common channels among given nodes"""
-        if not nodes:
-            return set()
-            
-        common = set(next(iter(nodes)).available_channels)
-        print("MWCBG common :", common)
-        for node in nodes:
-            common &= node.available_channels
-            
-        return common
-    
-    def _calculate_subgraph_weight(self, nodes: Set[Node], channels: Set[int]) -> float:
+
+            common_channels = set.intersection(
+                *[set(neighbor.channels) for neighbor in subgraph]
+            )
+            if len(common_channels) < 2:
+                continue
+
+            weight = self._calculate_weight(node, subgraph, common_channels)
+            if weight > max_weight:
+                max_weight = weight
+                best_subgraph = subgraph
+                best_common_channels = common_channels
+
+        return best_common_channels, best_subgraph, max_weight
+
+    def _calculate_weight(
+        self,
+        cluster_head: Node,
+        cluster_members: List[Node],
+        common_channels: Set[Channel],
+    ) -> float:
         """
-        Calculate weight for complete bipartite subgraph using equation (2) from paper
-        
-        wi = ν(|Ni*| · ∑(Qc)) + (1-ν)(|Ci*| · ∑(1- dj/∑dk))
+        Calculate weight based on channel quality and node distances.
+        w = v * |N| * ΣQc + (1 - v) * |C| * Σ(1 - dij / Σdik)
+        where:
+        - v: preference_factor
+        - |N|: number of members
+        - ΣQc: sum of channel qualities
+        - |C|: number of common channels
+        - dij: distance between cluster head and member j
+        - Σdik: sum of distances from cluster head to all members
         """
-        if not nodes or not channels:
-            return 0.0
-            
-        ν = 0.5  # preference factor between network stability and residual energy
-        
-        # Calculate channel quality sum
-        quality_sum = sum(self.source_node.calculate_channel_quality(c) for c in channels)
-        
-        # Calculate distance factor
-        distances = [self.source_node.calculate_distance(n) for n in nodes]
-        total_distance = sum(distances)
-        if total_distance == 0:
-            distance_factor = 0
-        else:
-            distance_factor = sum(1 - d/total_distance for d in distances)
-        
-        # Calculate final weight using equation (2)
-        weight = (
-            ν * (len(nodes) * quality_sum) +
-            (1-ν) * (len(channels) * distance_factor)
-        )
-        
+        v = self.preference_factor
+        N = len(cluster_members)
+        C = len(common_channels)
+
+        if N == 0 or C == 0:
+            return float("-inf")
+
+        # Sum of channel qualities
+        sum_qc = sum(channel.calculate_quality() for channel in common_channels)
+
+        # Distances from cluster head to each member
+        distances = [
+            cluster_head.calculate_distance(member) for member in cluster_members
+        ]
+        sum_dik = sum(distances)
+        if sum_dik == 0:
+            # Avoid division by zero; assume minimal distance
+            sum_dik = 1e-6
+
+        # Calculate Σ(1 - dij / Σdik)
+        sum_distance_factor = sum(1 - (dij / sum_dik) for dij in distances)
+
+        # Compute weight
+        weight = v * N * sum_qc + (1 - v) * C * sum_distance_factor
         return weight
 
-def find_MWCBG(node: Node, channels: Set[int], neighbors: Set[Node]) -> BipartiteGraphResult:
-    """
-    Wrapper function to execute MWCBG procedure
-    
-    Args:
-        node: Source node
-        channels: Available channels at source node
-        neighbors: Set of neighbor nodes
+
+def test_mwcbg():
+    channels = {
+        1: Channel(1, alpha=1, beta=2),
+        2: Channel(2, alpha=2, beta=1),
+        3: Channel(3, alpha=1, beta=1),
+    }
+
+    nodes = {
+        1: Node(1, x=0, y=0, initial_energy=0.2, transmission_range=50),
+        2: Node(2, x=1, y=1, initial_energy=0.2, transmission_range=50),
+        3: Node(3, x=2, y=2, initial_energy=0.2, transmission_range=50),
+        4: Node(4, x=3, y=6, initial_energy=0.2, transmission_range=50),
+    }
+    nodes[1].available_channels = [channels[1], channels[2], channels[3]]
+    nodes[2].available_channels = [channels[1], channels[2], channels[3]]
+    nodes[3].available_channels = [channels[2], channels[3]]
+    nodes[4].available_channels = [channels[2], channels[3]]
+
+    mwcbg = MWCBG(preference_factor=0.5)
+
+    node = nodes[1]
+    neighbors = [nodes[2], nodes[3], nodes[4]]
+    available_channels = {channels[1], channels[2], channels[3]}
+
+    common_channels, best_subgraph, weight = mwcbg.find_maximum_subgraph(
+        node=node,
+        neighbors=neighbors,
+        available_channels=available_channels,
+    )
+    print(common_channels, best_subgraph, weight)
+
+
+if __name__ == "__main__":
+    test_mwcbg()
+
+class MWCBG_Kerbosch:
+    def __init__(self, preference_factor: float = 0.5):
+        self.preference_factor = preference_factor
+
+    def find_maximum_subgraph(
+        self, node: "Node", available_channels: Set["Channel"], neighbors: List["Node"]
+    ):
+        if not neighbors or not available_channels or not node:
+            return None, None, float("-inf")
+
+        if len(neighbors) == 1 and len(available_channels) >= 2:
+            return available_channels, neighbors, self._calculate_weight(node, neighbors, available_channels)
+
+        # Build adjacency graph
+        G = nx.Graph()
+        G.add_nodes_from(neighbors)
         
-    Returns:
-        BipartiteGraphResult containing selected nodes, channels and weight
-    """
-    mwcbg = MWCBG(node, channels, neighbors)
-    mwcbg.construct_bipartite_graph()
-    return mwcbg.find_maximum_weight_complete_bipartite()
+        # Create node-to-channels mapping
+        node_channels = {n: n.channels & available_channels for n in neighbors}
+        
+        # Add edges only between nodes with sufficient common channels
+        for n1, n2 in combinations(neighbors, 2):
+            common = node_channels[n1] & node_channels[n2]
+            if len(common) >= 2:
+                G.add_edge(n1, n2)
+
+        if not G.edges():
+            return None, None, float("-inf")
+
+        # Find maximal cliques
+        max_weight = float("-inf")
+        best_subgraph = None
+        best_common_channels = None
+
+        for clique in self._find_cliques(G, node_channels):
+            if len(clique) < 2:
+                continue
+
+            common_channels = set.intersection(*[node_channels[n] for n in clique])
+            if len(common_channels) < 2:
+                continue
+
+            weight = self._calculate_weight(node, clique, common_channels)
+            if weight > max_weight:
+                max_weight = weight
+                best_subgraph = clique
+                best_common_channels = common_channels
+
+        return best_common_channels, best_subgraph, max_weight
+
+    def _find_cliques(self, G: nx.Graph, node_channels: dict):
+        """Modified clique finding algorithm optimized for our use case"""
+        def bronk(R, P, X):
+            if not P and not X:
+                if len(R) >= 2:
+                    common = set.intersection(*[node_channels[n] for n in R])
+                    if len(common) >= 2:
+                        yield list(R)
+                return
+
+            # Choose pivot from P∪X with most neighbors in P
+            pivot_neighbors = set()
+            if P:
+                pivot = max(P, key=lambda v: len(set(G[v]) & P))
+                pivot_neighbors = set(G[pivot]) & P
+
+            # Try remaining vertices
+            for v in P - pivot_neighbors:
+                v_neighbors = set(G[v])
+                yield from bronk(
+                    R | {v},
+                    P & v_neighbors,
+                    X & v_neighbors
+                )
+                P = P - {v}
+                X = X | {v}
+
+        return bronk(set(), set(G.nodes()), set())
+
+    def _calculate_weight(
+        self,
+        cluster_head: "Node",
+        cluster_members: List["Node"],
+        common_channels: Set["Channel"],
+    ) -> float:
+        N = len(cluster_members)
+        C = len(common_channels)
+        
+        if N == 0 or C == 0:
+            return float("-inf")
+
+        sum_qc = sum(channel.calculate_quality() for channel in common_channels)
+        distances = [cluster_head.calculate_distance(member) for member in cluster_members]
+        sum_dik = sum(distances)
+        
+        if sum_dik == 0:
+            sum_dik = 1e-6
+            
+        sum_distance_factor = sum(1 - (dij / sum_dik) for dij in distances)
+        return self.preference_factor * N * sum_qc + (1 - self.preference_factor) * C * sum_distance_factor
